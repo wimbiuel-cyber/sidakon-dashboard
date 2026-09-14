@@ -238,6 +238,13 @@ for kolom in kolom_status_proyek:
         if pilihan != "(semua)":
             filter_status_proyek[kolom] = pilihan
 
+if kolom_status_proyek:
+    st.sidebar.caption(
+        "ℹ️ Status \"Tidak punya proyek\" berarti *tidak ditemukan* pada data LPSE "
+        "yang berhasil di-scrape - bukan jaminan mutlak perusahaan tersebut sama "
+        "sekali tidak memiliki proyek."
+    )
+
 
 def urutan_keyakinan(label):
     """Urutkan skor keyakinan dari yang paling meyakinkan ke yang paling
@@ -345,6 +352,10 @@ with tab_ringkasan:
                 tooltip=["status", "jumlah"],
             ).properties(height=280)
             st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                "ℹ️ \"Tidak punya proyek\" = tidak ditemukan pada data LPSE yang "
+                "di-scrape, bukan berarti perusahaan itu pasti tidak punya proyek sama sekali."
+            )
 
 # ------------------------------------------------------------------------
 # TAB 2 - GRAFIK
@@ -396,6 +407,10 @@ with tab_grafik:
                         tooltip=["status", "jumlah"],
                     ).properties(height=280)
                     st.altair_chart(chart, use_container_width=True)
+        st.caption(
+            "ℹ️ \"Tidak punya proyek\" = tidak ditemukan pada data LPSE yang "
+            "di-scrape, bukan berarti perusahaan itu pasti tidak punya proyek sama sekali."
+        )
 
     st.markdown("##### 🏆 Top 10 perusahaan berdasarkan jumlah kemenangan tender")
     if "nama_pemenang" in df_pemenang.columns and not df_pemenang.empty:
