@@ -16,6 +16,7 @@ lokasinya beda.
 """
 
 import os
+import re
 
 import altair as alt
 import pandas as pd
@@ -122,11 +123,42 @@ st.markdown(f"""
         border-radius: 10px; overflow: hidden;
         box-shadow: 0 2px 10px rgba(0,0,0,0.06);
     }}
+
+    /* ------ Penyesuaian tampilan responsif (ponsel / layar sempit) ------ */
+    @media (max-width: 640px) {{
+        .judul-dashboard {{
+            padding: 18px 16px;
+        }}
+        .judul-dashboard h1 {{
+            font-size: 1.35rem;
+        }}
+        .judul-dashboard .subjudul {{
+            font-size: 0.75rem;
+        }}
+        .judul-dashboard p {{
+            font-size: 0.85rem;
+        }}
+        div[data-testid="stMetric"] {{
+            padding: 10px 12px;
+        }}
+        div[data-testid="stMetricValue"] {{
+            font-size: 1.3rem;
+        }}
+        div[data-testid="stTabs"] button[data-baseweb="tab"] {{
+            font-size: 0.85rem; padding: 6px 2px;
+        }}
+        .main {{
+            padding-left: 0.5rem; padding-right: 0.5rem;
+        }}
+    }}
 </style>
 """, unsafe_allow_html=True)
 
 NAMA_FILE_DEFAULT = ["pemenang_gabungan.xlsx", "pemenang_gabungan.csv",
                      "output/pemenang_gabungan.xlsx", "output/pemenang_gabungan.csv"]
+
+NAMA_FILE_LOKASI_DEFAULT = ["Detail_Lokasi.xlsx", "detail_lokasi.xlsx",
+                            "output/Detail_Lokasi.xlsx", "output/detail_lokasi.xlsx"]
 
 
 # ------------------------------------------------------------------------
@@ -171,6 +203,64 @@ def kolom_angka(df, nama_kolom):
     return pd.to_numeric(s, errors="coerce").fillna(0)
 
 
+PREFIX_SUFFIX_BADAN_USAHA = {"CV", "PT", "UD", "PD", "PO", "KOPERASI", "FIRMA"}
+
+
+def normalisasi_nama(nama):
+    """Samakan format nama perusahaan (huruf besar, tanpa tanda baca, tanpa
+    awalan/akhiran CV/PT/dst) supaya 'CV. Bintan Makmur Jaya' dan
+    'BINTAN MAKMUR JAYA, CV' dikenali sebagai perusahaan yang sama."""
+    if not nama:
+        return ""
+    n = str(nama).upper()
+    n = re.sub(r"[.,]", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
+    kata = n.split(" ")
+    while kata and kata[0] in PREFIX_SUFFIX_BADAN_USAHA:
+        kata = kata[1:]
+    while kata and kata[-1] in PREFIX_SUFFIX_BADAN_USAHA:
+        kata = kata[:-1]
+    return " ".join(kata).strip()
+
+
+def _baca_kamus_lokasi(sumber):
+    """Proses satu file (upload atau path) jadi kamus nama -> (lat, lon)."""
+    xls = pd.ExcelFile(sumber)
+    lokasi = {}
+    for nama_sheet in xls.sheet_names:
+        df_lokasi = xls.parse(nama_sheet)
+        df_lokasi.columns = [str(c).strip() for c in df_lokasi.columns]
+        kolom_nama = next((c for c in df_lokasi.columns if c.lower() in
+                            ("nama", "b0r3", "nama_perusahaan")), df_lokasi.columns[0])
+        kolom_lat = next((c for c in df_lokasi.columns if "lat" in c.lower()), None)
+        kolom_lon = next((c for c in df_lokasi.columns if "long" in c.lower() or "lon" in c.lower()), None)
+        if not kolom_lat or not kolom_lon:
+            continue
+        for _, baris in df_lokasi.iterrows():
+            key = normalisasi_nama(baris.get(kolom_nama, ""))
+            lat, lon = baris.get(kolom_lat), baris.get(kolom_lon)
+            if key and key not in lokasi and pd.notna(lat) and pd.notna(lon):
+                lokasi[key] = (lat, lon)
+    return lokasi
+
+
+@st.cache_data
+def muat_data_lokasi(file_terunggah):
+    """Baca file lokasi (semua sheet), gabungkan jadi satu kamus:
+    nama perusahaan yang dinormalisasi -> (latitude, longitude).
+    Kalau file_terunggah kosong, otomatis coba cari file di folder kerja
+    (Detail_Lokasi.xlsx dsb) supaya tidak perlu upload ulang tiap kali
+    dashboard dibuka."""
+    if file_terunggah is not None:
+        return _baca_kamus_lokasi(file_terunggah), None
+
+    for nama in NAMA_FILE_LOKASI_DEFAULT:
+        if os.path.exists(nama):
+            return _baca_kamus_lokasi(nama), nama
+
+    return {}, None
+
+
 # ------------------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------------------
@@ -184,6 +274,16 @@ file_upload = st.sidebar.file_uploader(
     type=["xlsx", "csv"],
     help="Kalau tidak diupload, dashboard otomatis mencari pemenang_gabungan.xlsx/.csv di folder ini.",
 )
+
+file_lokasi_upload = st.sidebar.file_uploader(
+    "Upload data lokasi/Google Maps (opsional)",
+    type=["xlsx"],
+    help="Kalau tidak diupload, dashboard otomatis mencari Detail_Lokasi.xlsx di folder ini. "
+         "Berkas berisi nama perusahaan, latitude, dan longitude.",
+)
+kamus_lokasi, sumber_lokasi = muat_data_lokasi(file_lokasi_upload)
+if sumber_lokasi:
+    st.sidebar.caption(f"📍 Data lokasi dimuat otomatis dari: **{sumber_lokasi}**")
 
 df, sumber_file = muat_data(file_upload)
 
@@ -237,6 +337,13 @@ for kolom in kolom_status_proyek:
         pilihan = st.sidebar.selectbox(f"Status proyek {tahun_label}", ["(semua)"] + opsi)
         if pilihan != "(semua)":
             filter_status_proyek[kolom] = pilihan
+
+if kolom_status_proyek:
+    st.sidebar.caption(
+        "ℹ️ Status \"Tidak punya proyek\" berarti *tidak ditemukan* pada data LPSE "
+        "yang berhasil di-scrape - bukan jaminan mutlak perusahaan tersebut sama "
+        "sekali tidak memiliki proyek."
+    )
 
 
 def urutan_keyakinan(label):
@@ -345,6 +452,10 @@ with tab_ringkasan:
                 tooltip=["status", "jumlah"],
             ).properties(height=280)
             st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                "ℹ️ \"Tidak punya proyek\" = tidak ditemukan pada data LPSE yang "
+                "di-scrape, bukan berarti perusahaan itu pasti tidak punya proyek sama sekali."
+            )
 
 # ------------------------------------------------------------------------
 # TAB 2 - GRAFIK
@@ -396,6 +507,10 @@ with tab_grafik:
                         tooltip=["status", "jumlah"],
                     ).properties(height=280)
                     st.altair_chart(chart, use_container_width=True)
+        st.caption(
+            "ℹ️ \"Tidak punya proyek\" = tidak ditemukan pada data LPSE yang "
+            "di-scrape, bukan berarti perusahaan itu pasti tidak punya proyek sama sekali."
+        )
 
     st.markdown("##### 🏆 Top 10 perusahaan berdasarkan jumlah kemenangan tender")
     if "nama_pemenang" in df_pemenang.columns and not df_pemenang.empty:
@@ -463,6 +578,14 @@ with tab_detail:
             kolom_a, kolom_b = st.columns(2)
             with kolom_a:
                 st.markdown(f"**📍 Alamat:** {tampil(baris_pertama.get('alamat'))}")
+                if kamus_lokasi:
+                    key_lokasi = normalisasi_nama(perusahaan_dipilih)
+                    if key_lokasi in kamus_lokasi:
+                        lat, lon = kamus_lokasi[key_lokasi]
+                        url_maps = f"https://www.google.com/maps?q={lat},{lon}"
+                        st.markdown(f"[🗺️ Buka lokasi di Google Maps]({url_maps})")
+                    else:
+                        st.caption("🗺️ Koordinat lokasi belum tersedia untuk perusahaan ini.")
                 st.markdown(f"**✉️ Email:** {tampil(baris_pertama.get('email'))}")
                 st.markdown(f"**📞 No. HP:** {tampil(baris_pertama.get('no_hp'))}")
             with kolom_b:
