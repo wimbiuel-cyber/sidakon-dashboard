@@ -223,6 +223,54 @@ def normalisasi_nama(nama):
     return " ".join(kata).strip()
 
 
+# Pemetaan resmi kelurahan -> kecamatan, Kota Tanjungpinang (4 kecamatan,
+# 18 kelurahan - sumber: BPS/Kemendagri). Dipakai untuk mendeteksi kecamatan
+# dari teks alamat ketika alamat menyebut nama kelurahan tapi tidak
+# menyebut nama kecamatan secara eksplisit.
+DAFTAR_KECAMATAN_TPI = ["Bukit Bestari", "Tanjungpinang Barat", "Tanjungpinang Kota", "Tanjungpinang Timur"]
+PETA_KELURAHAN_KECAMATAN = {
+    "DOMPAK": "Bukit Bestari", "SEI JANG": "Bukit Bestari", "SUNGAI JANG": "Bukit Bestari",
+    "TANJUNG AYUN SAKTI": "Bukit Bestari", "TANJUNG UNGGAT": "Bukit Bestari",
+    "BUKIT CERMIN": "Tanjungpinang Barat", "KAMPUNG BARU": "Tanjungpinang Barat",
+    "KEMBOJA": "Tanjungpinang Barat",
+    "KAMPUNG BUGIS": "Tanjungpinang Kota", "PENYENGAT": "Tanjungpinang Kota",
+    "SENGGARANG": "Tanjungpinang Kota",
+    "AIR RAJA": "Tanjungpinang Timur", "BATU IX": "Tanjungpinang Timur",
+    "BATU SEMBILAN": "Tanjungpinang Timur", "KAMPUNG BULANG": "Tanjungpinang Timur",
+    "MELAYU KOTA PIRING": "Tanjungpinang Timur", "PINANG KENCANA": "Tanjungpinang Timur",
+    # kelurahan yang namanya sama dengan nama kecamatannya sendiri
+    "TANJUNGPINANG BARAT": "Tanjungpinang Barat", "TANJUNG PINANG BARAT": "Tanjungpinang Barat",
+    "TANJUNGPINANG KOTA": "Tanjungpinang Kota", "TANJUNG PINANG KOTA": "Tanjungpinang Kota",
+    # kelurahan "Tanjungpinang Timur" ada di kecamatan Bukit Bestari (BUKAN
+    # kecamatan Tanjungpinang Timur) - urutan pengecekan di ekstrak_kecamatan
+    # sudah memastikan sebutan "Kec." eksplisit selalu diutamakan.
+    "TANJUNGPINANG TIMUR": "Bukit Bestari", "TANJUNG PINANG TIMUR": "Bukit Bestari",
+}
+
+
+def ekstrak_kecamatan(alamat):
+    """Deteksi kecamatan dari teks alamat. Prioritas: (1) sebutan eksplisit
+    'Kec. <nama>', paling akurat; (2) sebutan 'Kel. <nama>' dipetakan lewat
+    tabel kelurahan resmi; (3) kalau tidak ada petunjuk sama sekali,
+    kembalikan '' (Tidak diketahui)."""
+    if not alamat:
+        return ""
+    teks = str(alamat).upper()
+
+    m = re.search(r"KEC\.?\s*([A-Z ]+?)(?:[-,]|KEL\.?|$)", teks)
+    if m:
+        kandidat = re.sub(r"\s+", " ", m.group(1)).strip()
+        for kec in DAFTAR_KECAMATAN_TPI:
+            if kec.upper() in kandidat or kandidat in kec.upper():
+                return kec
+
+    for kelurahan, kec in PETA_KELURAHAN_KECAMATAN.items():
+        if re.search(r"\b" + re.escape(kelurahan) + r"\b", teks):
+            return kec
+
+    return ""
+
+
 def _baca_kamus_lokasi(sumber):
     """Proses satu file (upload atau path) jadi kamus nama -> (lat, lon)."""
     xls = pd.ExcelFile(sumber)
@@ -306,6 +354,9 @@ for kolom in ["nama_pemenang", "nama_paket", "instansi", "alamat", "email", "no_
 # (bukan sekadar perusahaan tambahan dari OSS/Gapensi yang belum pernah menang)
 df["_ada_proyek"] = df["kode_paket"] != "" if "kode_paket" in df.columns else False
 
+# kolom bantu: kecamatan perusahaan, dideteksi dari teks alamat
+df["kecamatan"] = df["alamat"].apply(ekstrak_kecamatan) if "alamat" in df.columns else ""
+
 st.sidebar.success(f"✅ Data dimuat: **{sumber_file}**")
 st.sidebar.caption(f"{len(df):,} baris total · {int(df['_ada_proyek'].sum()):,} baris pemenang tender")
 
@@ -317,6 +368,14 @@ if "instansi" in df.columns:
     pilih_instansi = st.sidebar.multiselect("Instansi LPSE", daftar_instansi, default=[])
 else:
     pilih_instansi = []
+
+daftar_kecamatan_ada = sorted([k for k in df["kecamatan"].unique() if k])
+pilih_kecamatan = st.sidebar.multiselect(
+    "Kecamatan Perusahaan", daftar_kecamatan_ada, default=[],
+    help="Dideteksi otomatis dari teks alamat (sebutan Kec./Kel.). Perusahaan "
+         "yang alamatnya tidak menyebut kelurahan/kecamatan akan masuk kategori "
+         "'Tidak diketahui' dan tetap tampil kalau filter ini dikosongkan.",
+)
 
 if "tahun_anggaran" in df.columns:
     # bersihkan supaya tampil sebagai bilangan bulat ("2026"), bukan "2026.0"
@@ -376,6 +435,8 @@ df_filtered = df.copy()
 
 if pilih_instansi:
     df_filtered = df_filtered[df_filtered["instansi"].isin(pilih_instansi)]
+if pilih_kecamatan:
+    df_filtered = df_filtered[df_filtered["kecamatan"].isin(pilih_kecamatan)]
 if pilih_tahun:
     df_filtered = df_filtered[df_filtered["tahun_anggaran"].isin(pilih_tahun)]
 for kolom, nilai in filter_status_proyek.items():
@@ -427,17 +488,25 @@ with tab_ringkasan:
     kolom_a, kolom_b = st.columns([2, 1])
 
     with kolom_a:
-        st.markdown("##### Sebaran instansi (baris sesuai filter)")
-        if "instansi" in df_filtered.columns and not df_filtered.empty:
-            data_instansi = df_filtered.groupby("instansi").size().reset_index(name="jumlah")
-            data_instansi = data_instansi.sort_values("jumlah", ascending=False)
-            chart = alt.Chart(data_instansi).mark_bar(cornerRadiusEnd=4).encode(
+        st.markdown("##### Sebaran kecamatan perusahaan (baris sesuai filter)")
+        if "kecamatan" in df_filtered.columns and not df_filtered.empty:
+            data_kec = df_filtered.copy()
+            data_kec["kecamatan"] = data_kec["kecamatan"].replace("", "Tidak diketahui")
+            data_kec = data_kec.groupby("kecamatan").size().reset_index(name="jumlah")
+            data_kec = data_kec.sort_values("jumlah", ascending=False)
+            chart = alt.Chart(data_kec).mark_bar(cornerRadiusEnd=4).encode(
                 x=alt.X("jumlah:Q", title="Jumlah baris"),
-                y=alt.Y("instansi:N", sort="-x", title=""),
-                color=alt.value(WARNA_UTAMA),
-                tooltip=["instansi", "jumlah"],
+                y=alt.Y("kecamatan:N", sort="-x", title=""),
+                color=alt.condition(
+                    alt.datum.kecamatan == "Tidak diketahui", alt.value("#C7C7D9"), alt.value(WARNA_UTAMA)
+                ),
+                tooltip=["kecamatan", "jumlah"],
             ).properties(height=280)
             st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                "ℹ️ Kecamatan dideteksi otomatis dari teks alamat. \"Tidak diketahui\" "
+                "berarti alamat tidak menyebut kelurahan/kecamatan secara jelas."
+            )
 
     with kolom_b:
         if kolom_status_proyek:
@@ -578,6 +647,7 @@ with tab_detail:
             kolom_a, kolom_b = st.columns(2)
             with kolom_a:
                 st.markdown(f"**📍 Alamat:** {tampil(baris_pertama.get('alamat'))}")
+                st.markdown(f"**🏘️ Kecamatan:** {tampil(baris_pertama.get('kecamatan')) if baris_pertama.get('kecamatan') else 'Tidak diketahui'}")
                 if kamus_lokasi:
                     key_lokasi = normalisasi_nama(perusahaan_dipilih)
                     if key_lokasi in kamus_lokasi:
