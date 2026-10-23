@@ -17,6 +17,7 @@ lokasinya beda.
 
 import os
 import re
+from difflib import SequenceMatcher
 
 import altair as alt
 import pandas as pd
@@ -157,6 +158,17 @@ st.markdown(f"""
 NAMA_FILE_DEFAULT = ["pemenang_gabungan.xlsx", "pemenang_gabungan.csv",
                      "output/pemenang_gabungan.xlsx", "output/pemenang_gabungan.csv"]
 
+def _versi_file(daftar_nama):
+    """Penanda versi berkas data (nama + waktu terakhir diubah). Dipakai sebagai
+    bagian kunci cache, supaya begitu admin mengganti berkas data lewat GitHub,
+    dashboard otomatis memuat data baru, bukan data lama dari cache."""
+    return tuple((n, os.path.getmtime(n)) for n in daftar_nama if os.path.exists(n))
+
+
+# kolom yang harus dibaca sebagai TEKS (bukan angka), supaya angka nol di depan
+# nomor HP dan digit panjang kode paket/NPWP tidak hilang atau berubah jadi '812.0'
+KOLOM_TEKS = {"no_hp": str, "npwp": str, "kode_paket": str, "kode_lpse": str}
+
 NAMA_FILE_LOKASI_DEFAULT = ["Detail_Lokasi.xlsx", "detail_lokasi.xlsx",
                             "output/Detail_Lokasi.xlsx", "output/detail_lokasi.xlsx"]
 
@@ -166,20 +178,20 @@ NAMA_FILE_LOKASI_DEFAULT = ["Detail_Lokasi.xlsx", "detail_lokasi.xlsx",
 # ------------------------------------------------------------------------
 
 @st.cache_data
-def muat_data(file_terunggah):
+def muat_data(file_terunggah, versi_file=None):
     if file_terunggah is not None:
         if file_terunggah.name.endswith(".csv"):
-            df = pd.read_csv(file_terunggah)
+            df = pd.read_csv(file_terunggah, dtype=KOLOM_TEKS)
         else:
-            df = pd.read_excel(file_terunggah)
+            df = pd.read_excel(file_terunggah, dtype=KOLOM_TEKS)
         return df, file_terunggah.name
 
     for nama in NAMA_FILE_DEFAULT:
         if os.path.exists(nama):
             if nama.endswith(".csv"):
-                df = pd.read_csv(nama)
+                df = pd.read_csv(nama, dtype=KOLOM_TEKS)
             else:
-                df = pd.read_excel(nama)
+                df = pd.read_excel(nama, dtype=KOLOM_TEKS)
             return df, nama
 
     return None, None
@@ -207,13 +219,21 @@ PREFIX_SUFFIX_BADAN_USAHA = {"CV", "PT", "UD", "PD", "PO", "KOPERASI", "FIRMA"}
 
 
 def normalisasi_nama(nama):
-    """Samakan format nama perusahaan (huruf besar, tanpa tanda baca, tanpa
-    awalan/akhiran CV/PT/dst) supaya 'CV. Bintan Makmur Jaya' dan
-    'BINTAN MAKMUR JAYA, CV' dikenali sebagai perusahaan yang sama."""
+    """Samakan format nama perusahaan supaya variasi penulisan yang sebenarnya
+    perusahaan yang sama dikenali sebagai satu kunci. Yang ditangani:
+    huruf besar/kecil, titik/koma/tanda hubung/kurung/kutip, spasi ganda
+    (termasuk spasi non-breaking), singkatan bertitik ('P.T.', 'C.V.'),
+    '&' vs 'DAN', 'PERSEROAN TERBATAS' vs 'PT', serta awalan ATAU akhiran
+    badan usaha ('CV. NAMA' = 'NAMA, CV' = 'NAMA')."""
     if not nama:
         return ""
     n = str(nama).upper()
-    n = re.sub(r"[.,]", " ", n)
+    n = re.sub(r"\bP\s*\.\s*T\b\.?", "PT", n)
+    n = re.sub(r"\bC\s*\.\s*V\b\.?", "CV", n)
+    n = re.sub(r"\bU\s*\.\s*D\b\.?", "UD", n)
+    n = n.replace("PERSEROAN TERBATAS", "PT").replace("COMMANDITAIRE VENNOOTSCHAP", "CV")
+    n = n.replace("&", " DAN ")
+    n = re.sub(r"[^\w\s]|_", " ", n)
     n = re.sub(r"\s+", " ", n).strip()
     kata = n.split(" ")
     while kata and kata[0] in PREFIX_SUFFIX_BADAN_USAHA:
@@ -221,6 +241,24 @@ def normalisasi_nama(nama):
     while kata and kata[-1] in PREFIX_SUFFIX_BADAN_USAHA:
         kata = kata[:-1]
     return " ".join(kata).strip()
+
+
+def cari_nama_mirip(daftar_key, ambang=0.9):
+    """Cari pasangan kunci nama yang sangat mirip (misal beda satu huruf) tapi
+    masih terhitung perusahaan berbeda. Hanya untuk pengecekan kualitas data."""
+    keys = sorted({k for k in daftar_key if k})
+    hasil = []
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            if abs(len(a) - len(b)) > 4:
+                continue
+            sm = SequenceMatcher(None, a, b)
+            if sm.real_quick_ratio() < ambang or sm.quick_ratio() < ambang:
+                continue
+            r = sm.ratio()
+            if r >= ambang:
+                hasil.append((a, b, round(r, 2)))
+    return sorted(hasil, key=lambda x: -x[2])
 
 
 # Pemetaan resmi kelurahan -> kecamatan, Kota Tanjungpinang (4 kecamatan,
@@ -293,7 +331,7 @@ def _baca_kamus_lokasi(sumber):
 
 
 @st.cache_data
-def muat_data_lokasi(file_terunggah):
+def muat_data_lokasi(file_terunggah, versi_file=None):
     """Baca file lokasi (semua sheet), gabungkan jadi satu kamus:
     nama perusahaan yang dinormalisasi -> (latitude, longitude).
     Kalau file_terunggah kosong, otomatis coba cari file di folder kerja
@@ -317,29 +355,19 @@ st.sidebar.markdown("## 🏗️ SIDAKON")
 st.sidebar.caption("**Si**stem Informasi **Da**ta Perusahaan **Kon**struksi")
 st.sidebar.caption("Data pemenang tender LPSE Kota Tanjungpinang, diperkaya data OSS & Gapensi.")
 
-file_upload = st.sidebar.file_uploader(
-    "Upload file hasil scraping (opsional)",
-    type=["xlsx", "csv"],
-    help="Kalau tidak diupload, dashboard otomatis mencari pemenang_gabungan.xlsx/.csv di folder ini.",
-)
-
-file_lokasi_upload = st.sidebar.file_uploader(
-    "Upload data lokasi/Google Maps (opsional)",
-    type=["xlsx"],
-    help="Kalau tidak diupload, dashboard otomatis mencari Detail_Lokasi.xlsx di folder ini. "
-         "Berkas berisi nama perusahaan, latitude, dan longitude.",
-)
-kamus_lokasi, sumber_lokasi = muat_data_lokasi(file_lokasi_upload)
+# Data dimuat otomatis dari berkas yang ada di repository (dikelola admin
+# lewat GitHub) - sengaja TIDAK ada fitur upload manual, supaya pengguna
+# biasa tidak bisa mengganti/menimpa data yang tampil.
+kamus_lokasi, sumber_lokasi = muat_data_lokasi(None, _versi_file(NAMA_FILE_LOKASI_DEFAULT))
 if sumber_lokasi:
     st.sidebar.caption(f"📍 Data lokasi dimuat otomatis dari: **{sumber_lokasi}**")
 
-df, sumber_file = muat_data(file_upload)
+df, sumber_file = muat_data(None, _versi_file(NAMA_FILE_DEFAULT))
 
 if df is None:
     st.error(
-        "File data tidak ditemukan. Upload file `pemenang_gabungan.xlsx` atau "
-        "`.csv` lewat sidebar, atau taruh file itu di folder yang sama dengan "
-        "`dashboard.py` ini."
+        "File data `pemenang_gabungan.xlsx`/`.csv` tidak ditemukan di folder ini. "
+        "Hubungi admin untuk memastikan data sudah ditambahkan ke repository."
     )
     st.stop()
 
@@ -356,6 +384,19 @@ df["_ada_proyek"] = df["kode_paket"] != "" if "kode_paket" in df.columns else Fa
 
 # kolom bantu: kecamatan perusahaan, dideteksi dari teks alamat
 df["kecamatan"] = df["alamat"].apply(ekstrak_kecamatan) if "alamat" in df.columns else ""
+
+# kolom bantu: kunci nama ternormalisasi, supaya "CV KREASINDO KEPRI" dan
+# "CV. KREASINDO KEPRI" (beda titik/spasi/kapitalisasi/urutan CV-PT) dikenali
+# sebagai SATU perusahaan yang sama, bukan dihitung dobel
+if "nama_pemenang" in df.columns:
+    df["_nama_key"] = df["nama_pemenang"].apply(normalisasi_nama)
+    # nama kanonik per kelompok = versi penulisan yang paling sering muncul
+    _hitung_nama = df[df["_nama_key"] != ""].groupby(["_nama_key", "nama_pemenang"]).size()
+    _nama_kanonik = _hitung_nama.groupby(level=0).idxmax().apply(lambda x: x[1])
+    df["_nama_tampil"] = df["_nama_key"].map(_nama_kanonik).fillna(df["nama_pemenang"])
+else:
+    df["_nama_key"] = ""
+    df["_nama_tampil"] = ""
 
 st.sidebar.success(f"✅ Data dimuat: **{sumber_file}**")
 st.sidebar.caption(f"{len(df):,} baris total · {int(df['_ada_proyek'].sum()):,} baris pemenang tender")
@@ -478,8 +519,8 @@ tab_ringkasan, tab_grafik, tab_tabel, tab_detail = st.tabs(
 with tab_ringkasan:
     kolom1, kolom2, kolom3, kolom4 = st.columns(4)
     kolom1.metric("Total baris (sesuai filter)", f"{len(df_filtered):,}")
-    kolom2.metric("Perusahaan unik", f"{df_filtered['nama_pemenang'].nunique():,}"
-                  if "nama_pemenang" in df_filtered.columns else "-")
+    kolom2.metric("Perusahaan unik", f"{df_filtered.loc[df_filtered['_nama_key'] != '', '_nama_key'].nunique():,}"
+                  if "_nama_key" in df_filtered.columns else "-")
     kolom3.metric("Baris pemenang tender", f"{len(df_pemenang):,}")
     nilai_total = kolom_angka(df_pemenang, "harga_terkoreksi").sum()
     kolom4.metric("Total nilai kontrak", f"Rp {nilai_total:,.0f}")
@@ -582,15 +623,16 @@ with tab_grafik:
         )
 
     st.markdown("##### 🏆 Top 10 perusahaan berdasarkan jumlah kemenangan tender")
-    if "nama_pemenang" in df_pemenang.columns and not df_pemenang.empty:
+    if "_nama_key" in df_pemenang.columns and not df_pemenang.empty:
         data_top = (
-            df_pemenang.groupby("nama_pemenang").size().reset_index(name="jumlah_menang")
+            df_pemenang[df_pemenang["_nama_key"] != ""]
+            .groupby(["_nama_key", "_nama_tampil"]).size().reset_index(name="jumlah_menang")
             .sort_values("jumlah_menang", ascending=False).head(10)
         )
         chart = alt.Chart(data_top).mark_bar(cornerRadiusEnd=4, color="#10B981").encode(
             x=alt.X("jumlah_menang:Q", title="Jumlah kemenangan"),
-            y=alt.Y("nama_pemenang:N", sort="-x", title=""),
-            tooltip=["nama_pemenang", "jumlah_menang"],
+            y=alt.Y("_nama_tampil:N", sort="-x", title=""),
+            tooltip=[alt.Tooltip("_nama_tampil:N", title="Perusahaan"), "jumlah_menang"],
         ).properties(height=350)
         st.altair_chart(chart, use_container_width=True)
     else:
@@ -621,6 +663,30 @@ with tab_tabel:
         mime="text/csv",
     )
 
+    with st.expander("🔎 Cek kualitas data: kemungkinan nama perusahaan ganda"):
+        st.caption(
+            "Nama yang hanya beda tanda baca/spasi/CV-PT sudah otomatis disatukan. "
+            "Alat ini mencari pasangan nama yang SANGAT mirip (misal beda satu huruf) "
+            "tetapi masih dianggap perusahaan berbeda. Hanya untuk pengecekan - "
+            "tidak mengubah data apa pun."
+        )
+        if st.button("Jalankan pengecekan nama mirip"):
+            kunci_ke_nama = (
+                df[df["_nama_key"] != ""].drop_duplicates("_nama_key")
+                .set_index("_nama_key")["_nama_tampil"].to_dict()
+            )
+            pasangan = cari_nama_mirip(list(kunci_ke_nama.keys()))
+            if pasangan:
+                st.dataframe(
+                    pd.DataFrame(
+                        [(kunci_ke_nama[a], kunci_ke_nama[b], r) for a, b, r in pasangan],
+                        columns=["Nama A", "Nama B", "Kemiripan"],
+                    ),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.success("Tidak ditemukan pasangan nama yang mencurigakan.")
+
 # ------------------------------------------------------------------------
 # TAB 4 - DETAIL PERUSAHAAN
 # ------------------------------------------------------------------------
@@ -637,12 +703,22 @@ with tab_detail:
             return "-"
         return teks
 
-    if "nama_pemenang" in df_filtered.columns:
-        daftar_perusahaan = sorted([p for p in df_filtered["nama_pemenang"].unique() if p])
+    if "_nama_key" in df_filtered.columns:
+        # satu entri per perusahaan (bukan per variasi penulisan nama)
+        daftar_perusahaan = sorted(
+            df_filtered.loc[df_filtered["_nama_key"] != "", "_nama_tampil"].unique()
+        )
         if daftar_perusahaan:
             perusahaan_dipilih = st.selectbox("Pilih perusahaan", daftar_perusahaan)
-            detail = df_filtered[df_filtered["nama_pemenang"] == perusahaan_dipilih]
-            baris_pertama = detail.iloc[0]
+            key_dipilih = normalisasi_nama(perusahaan_dipilih)
+            # gabungkan semua baris dari semua variasi penulisan nama yang sama
+            detail = df_filtered[df_filtered["_nama_key"] == key_dipilih]
+            # profil diambil dari baris yang datanya paling lengkap, bukan sekadar baris pertama
+            kolom_profil = [c for c in ["alamat", "email", "no_hp", "npwp"] if c in detail.columns]
+            skor_lengkap = detail[kolom_profil].apply(
+                lambda r: sum(1 for v in r if tampil(v) != "-"), axis=1
+            )
+            baris_pertama = detail.loc[skor_lengkap.idxmax()]
 
             kolom_a, kolom_b = st.columns(2)
             with kolom_a:
