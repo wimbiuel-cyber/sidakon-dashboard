@@ -240,6 +240,11 @@ def normalisasi_nama(nama):
         kata = kata[1:]
     while kata and kata[-1] in PREFIX_SUFFIX_BADAN_USAHA:
         kata = kata[:-1]
+    # awalan CV/PT yang menempel tanpa spasi/titik ("CVROLAND", "CVBERSAMA HARAPAN
+    # JAYA"). Sengaja HANYA CV dan PT: awalan UD/PD tidak dipotong karena banyak
+    # nama sah yang diawali huruf itu (mis. "UDIN", "PDAM").
+    if kata and len(kata[0]) >= 5 and kata[0][:2] in ("CV", "PT"):
+        kata[0] = kata[0][2:]
     return " ".join(kata).strip()
 
 
@@ -394,6 +399,14 @@ if "nama_pemenang" in df.columns:
     _hitung_nama = df[df["_nama_key"] != ""].groupby(["_nama_key", "nama_pemenang"]).size()
     _nama_kanonik = _hitung_nama.groupby(level=0).idxmax().apply(lambda x: x[1])
     df["_nama_tampil"] = df["_nama_key"].map(_nama_kanonik).fillna(df["nama_pemenang"])
+    # status "Punya/Tidak punya proyek" ditentukan per PERUSAHAAN: kalau salah satu
+    # baris (mis. baris pemenang LPSE) menyatakan punya proyek pada tahun X, semua
+    # baris perusahaan itu (mis. baris dari OSS/Gapensi yang ejaannya beda) ikut
+    # berstatus punya proyek pada tahun X - supaya tidak saling bertentangan
+    for _kol in [c for c in df.columns if c.startswith("status_proyek_")]:
+        _label_punya = f"Punya proyek {_kol.replace('status_proyek_', '')}"
+        _kunci_punya = set(df.loc[df[_kol].astype(str) == _label_punya, "_nama_key"]) - {""}
+        df.loc[df["_nama_key"].isin(_kunci_punya), _kol] = _label_punya
 else:
     df["_nama_key"] = ""
     df["_nama_tampil"] = ""
