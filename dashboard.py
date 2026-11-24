@@ -37,7 +37,10 @@ st.set_page_config(
 WARNA_UTAMA = "#4338CA"
 WARNA_UTAMA2 = "#7C3AED"
 WARNA_AKSEN = "#F59E0B"
-PALET_WARNA = ["#4338CA", "#F59E0B", "#10B981", "#EF4444", "#7C3AED", "#EC4899", "#06B6D4"]
+# Aksen yang terbaca di tema terang MAUPUN gelap (kontras sekitar 4:1 di keduanya).
+# "#4338CA" hanya 2,3:1 di tema gelap, jadi dipakai khusus untuk banner saja.
+WARNA_TEMA = "#6366F1"
+PALET_WARNA = ["#6366F1", "#F59E0B", "#10B981", "#EF4444", "#7C3AED", "#EC4899", "#06B6D4"]
 
 st.markdown(f"""
 <style>
@@ -50,9 +53,9 @@ st.markdown(f"""
         padding-top: 1rem;
     }}
     div[data-testid="stMetric"] {{
-        background: linear-gradient(135deg, #ffffff 0%, #f2f0ff 100%);
-        border: 1px solid #e4e0fb;
-        border-left: 5px solid {WARNA_UTAMA};
+        background: linear-gradient(135deg, rgba(127,127,127,0.06) 0%, rgba(124,58,237,0.13) 100%);
+        border: 1px solid rgba(124,58,237,0.28);
+        border-left: 5px solid {WARNA_TEMA};
         border-radius: 14px;
         padding: 18px 20px;
         box-shadow: 0 4px 14px rgba(67, 56, 202, 0.10);
@@ -63,11 +66,11 @@ st.markdown(f"""
         box-shadow: 0 8px 20px rgba(67, 56, 202, 0.18);
     }}
     div[data-testid="stMetric"] label {{
-        color: #5b5b7a; font-weight: 600; font-size: 0.85rem;
+        color: inherit; opacity: 0.75; font-weight: 600; font-size: 0.85rem;
         text-transform: uppercase; letter-spacing: 0.03em;
     }}
     div[data-testid="stMetricValue"] {{
-        color: {WARNA_UTAMA}; font-weight: 800;
+        color: {WARNA_TEMA}; font-weight: 800;
     }}
     .judul-dashboard {{
         background: linear-gradient(120deg, {WARNA_UTAMA} 0%, {WARNA_UTAMA2} 55%, #EC4899 100%);
@@ -94,15 +97,15 @@ st.markdown(f"""
         font-weight: 700; font-size: 1.02rem; padding: 10px 4px;
     }}
     div[data-testid="stTabs"] button[aria-selected="true"] {{
-        color: {WARNA_UTAMA};
-        border-bottom-color: {WARNA_UTAMA} !important;
+        color: {WARNA_TEMA};
+        border-bottom-color: {WARNA_TEMA} !important;
     }}
     [data-testid="stAppViewContainer"] {{
-        background:
+        background-image:
             radial-gradient(circle at 8% 8%, rgba(124,58,237,0.16) 0%, rgba(124,58,237,0) 30%),
             radial-gradient(circle at 92% 95%, rgba(236,72,153,0.16) 0%, rgba(236,72,153,0) 32%),
             radial-gradient(circle at 92% 5%, rgba(245,158,11,0.10) 0%, rgba(245,158,11,0) 25%),
-            linear-gradient(160deg, #f2effe 0%, #e9edfd 35%, #fbeaf3 75%, #fdf3e3 100%);
+            linear-gradient(160deg, rgba(124,58,237,0.07) 0%, rgba(79,70,229,0.05) 35%, rgba(236,72,153,0.07) 75%, rgba(245,158,11,0.05) 100%);
     }}
     [data-testid="stHeader"] {{
         background: rgba(0,0,0,0);
@@ -114,11 +117,11 @@ st.markdown(f"""
         max-height: 100vh;
     }}
     section[data-testid="stSidebar"] {{
-        background: linear-gradient(180deg, #f8f7ff 0%, #f1effc 100%);
-        border-right: 1px solid #e4e0fb;
+        background-image: linear-gradient(180deg, rgba(124,58,237,0.08) 0%, rgba(236,72,153,0.06) 100%);
+        border-right: 1px solid rgba(124,58,237,0.22);
     }}
     section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {{
-        color: {WARNA_UTAMA};
+        color: {WARNA_TEMA};
     }}
     div[data-testid="stDataFrame"] {{
         border-radius: 10px; overflow: hidden;
@@ -552,7 +555,7 @@ with tab_ringkasan:
                 x=alt.X("jumlah:Q", title="Jumlah baris"),
                 y=alt.Y("kecamatan:N", sort="-x", title=""),
                 color=alt.condition(
-                    alt.datum.kecamatan == "Tidak diketahui", alt.value("#C7C7D9"), alt.value(WARNA_UTAMA)
+                    alt.datum.kecamatan == "Tidak diketahui", alt.value("#C7C7D9"), alt.value(WARNA_TEMA)
                 ),
                 tooltip=["kecamatan", "jumlah"],
             ).properties(height=280)
@@ -591,7 +594,7 @@ with tab_grafik:
         st.markdown("##### Jumlah paket per instansi")
         if "instansi" in df_pemenang.columns and not df_pemenang.empty:
             data = df_pemenang.groupby("instansi").size().reset_index(name="jumlah").sort_values("jumlah", ascending=False)
-            chart = alt.Chart(data).mark_bar(cornerRadiusEnd=4, color=WARNA_UTAMA).encode(
+            chart = alt.Chart(data).mark_bar(cornerRadiusEnd=4, color=WARNA_TEMA).encode(
                 x=alt.X("jumlah:Q", title="Jumlah paket"),
                 y=alt.Y("instansi:N", sort="-x", title=""),
                 tooltip=["instansi", "jumlah"],
